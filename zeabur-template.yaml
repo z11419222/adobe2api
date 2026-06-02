@@ -1,0 +1,139 @@
+apiVersion: zeabur.com/v1
+kind: Template
+metadata:
+  name: adobe2api
+spec:
+  description: Adobe Firefly / OpenAI compatible gateway service with admin UI, token pool management, image generation and video generation APIs.
+  icon: https://raw.githubusercontent.com/zeabur/service-icons/main/marketplace/python.svg
+  tags:
+    - AI
+    - API
+    - Tool
+  variables:
+    - key: PUBLIC_DOMAIN
+      type: DOMAIN
+      name: Public Domain
+      description: The domain Zeabur will bind to the adobe2api web service.
+  readme: |-
+    # adobe2api
+
+    Adobe Firefly / OpenAI 兼容网关服务。
+
+    部署完成后访问绑定域名进入管理后台。首次部署会自动初始化配置文件到 `/app/config/config.json`，并将 `/app/config` 与 `/app/data` 持久化。
+
+    默认管理员用户名为 `admin`，管理员密码和服务 API Key 会由 Zeabur 自动生成，并可在服务环境变量中查看。登录管理后台后可以在系统配置中修改管理员账号、密码、服务 API Key、公开访问地址、代理和生成参数。
+
+    对外接口：
+
+    - 管理后台：`${ZEABUR_WEB_URL}`
+    - OpenAI 兼容接口：`${ZEABUR_WEB_URL}/v1/chat/completions`
+    - 图像生成接口：`${ZEABUR_WEB_URL}/v1/images/generations`
+
+    服务 API Key 可通过以下任一方式传递：
+
+    - `Authorization: Bearer <api_key>`
+    - `X-API-Key: <api_key>`
+  resourceRequirement:
+    minConfig:
+      cpu: 0.5
+      ram: 0.5
+    recommendedConfig:
+      cpu: 1
+      ram: 1
+  services:
+    - name: adobe2api
+      icon: https://raw.githubusercontent.com/zeabur/service-icons/main/marketplace/python.svg
+      template: GIT
+      domainKey: PUBLIC_DOMAIN
+      spec:
+        source:
+          source: GITHUB
+          repo: 1240225875
+          branch: master
+        ports:
+          - id: web
+            port: 6001
+            type: HTTP
+        volumes:
+          - id: data
+            dir: /app/data
+          - id: config
+            dir: /app/config
+        init:
+          - id: init-config
+            command:
+              - /bin/sh
+              - -c
+              - |
+                mkdir -p /app/config /app/data/generated /app/static/generated
+                if [ ! -f /app/config/config.json ]; then
+                  cat > /app/config/config.json <<EOF
+                {
+                  "api_key": "${SERVICE_API_KEY}",
+                  "admin_username": "${ADMIN_USERNAME}",
+                  "admin_password": "${ADMIN_PASSWORD}",
+                  "admin_session_secret": "${ADMIN_SESSION_SECRET}",
+                  "public_base_url": "${PUBLIC_BASE_URL}",
+                  "proxy": "",
+                  "use_proxy": false,
+                  "generate_timeout": 300,
+                  "refresh_interval_hours": 15,
+                  "retry_enabled": true,
+                  "retry_max_attempts": 3,
+                  "retry_backoff_seconds": 1.0,
+                  "retry_on_status_codes": [429, 451, 500, 502, 503, 504],
+                  "retry_on_error_types": ["timeout", "connection", "proxy"],
+                  "token_rotation_strategy": "round_robin",
+                  "batch_concurrency": 5,
+                  "generated_max_size_mb": 1024,
+                  "generated_prune_size_mb": 200,
+                  "gpt_image_quality": "low"
+                }
+                EOF
+                fi
+            volumes:
+              - id: config
+                mountPath: /app/config
+              - id: data
+                mountPath: /app/data
+        env:
+          TZ:
+            default: Asia/Shanghai
+          PORT:
+            default: "6001"
+          ADOBE_API_KEY:
+            default: clio-playground-web
+          ADOBE_PUBLIC_BASE_URL:
+            default: ${ZEABUR_WEB_URL}
+          PUBLIC_BASE_URL:
+            default: ${ZEABUR_WEB_URL}
+          SERVICE_API_KEY:
+            default: ${PASSWORD}
+            expose: true
+          ADMIN_USERNAME:
+            default: admin
+            expose: true
+          ADMIN_PASSWORD:
+            default: ${PASSWORD}
+            expose: true
+          ADMIN_SESSION_SECRET:
+            default: ${PASSWORD}
+          ADOBE_IMPERSONATE:
+            default: chrome124
+          ADOBE_PROXY:
+            default: ""
+          ADOBE_GENERATE_TIMEOUT:
+            default: "300"
+        instructions:
+          - title: Admin UI
+            content: ${ZEABUR_WEB_URL}
+          - title: OpenAI compatible endpoint
+            content: ${ZEABUR_WEB_URL}/v1/chat/completions
+          - title: Image generation endpoint
+            content: ${ZEABUR_WEB_URL}/v1/images/generations
+          - title: Admin username
+            content: ${ADMIN_USERNAME}
+          - title: Admin password
+            content: ${ADMIN_PASSWORD}
+          - title: Service API Key
+            content: ${SERVICE_API_KEY}
