@@ -2,7 +2,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -19,6 +19,7 @@ from api.schemas import (
     TokenBatchAddRequest,
     TokenCreditsBatchRefreshRequest,
 )
+from core.request_logs import parse_log_start_time
 
 
 def build_admin_router(
@@ -109,21 +110,69 @@ def build_admin_router(
             return RedirectResponse(url="/login")
         return FileResponse(static_dir / "admin.html")
 
+    def _resolve_log_start_ts(
+        start_time: str = "", start_ts: Optional[float] = None
+    ) -> Optional[float]:
+        if start_ts is not None:
+            try:
+                return float(start_ts)
+            except Exception:
+                raise HTTPException(status_code=400, detail="start_ts must be a number")
+        if not str(start_time or "").strip():
+            return None
+        try:
+            return parse_log_start_time(start_time)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
     @router.get("/api/v1/logs")
-    def list_logs(request: Request, limit: int = 20, page: int = 1):
+    def list_logs(
+        request: Request,
+        limit: int = 20,
+        page: int = 1,
+        start_time: str = "",
+        start_ts: Optional[float] = None,
+        model: str = "",
+        order: str = "",
+    ):
         require_admin_auth(request)
-        logs, total = log_store.list(limit=limit, page=page)
         safe_limit = min(max(int(limit or 20), 1), 100)
         safe_page = max(int(page or 1), 1)
+        resolved_start_ts = _resolve_log_start_ts(start_time=start_time, start_ts=start_ts)
+        model_filter = str(model or "").strip()
+        raw_order = str(order or "").strip().lower()
+        if raw_order and raw_order not in {"asc", "desc"}:
+            raise HTTPException(status_code=400, detail="order must be asc or desc")
+        effective_order = raw_order or ("asc" if resolved_start_ts is not None else "desc")
+        logs, total = log_store.list(
+            limit=safe_limit,
+            page=safe_page,
+            start_ts=resolved_start_ts,
+            model=model_filter or None,
+            order=effective_order,
+        )
         total_pages = (total + safe_limit - 1) // safe_limit if total > 0 else 1
         if safe_page > total_pages:
             safe_page = total_pages
+            logs, total = log_store.list(
+                limit=safe_limit,
+                page=safe_page,
+                start_ts=resolved_start_ts,
+                model=model_filter or None,
+                order=effective_order,
+            )
         return {
             "logs": logs,
             "page": safe_page,
             "limit": safe_limit,
             "total": total,
             "total_pages": total_pages,
+            "order": effective_order,
+            "filters": {
+                "start_time": str(start_time or "").strip(),
+                "start_ts": resolved_start_ts,
+                "model": model_filter,
+            },
         }
 
     @router.get("/api/v1/logs/errors/{code}")
@@ -172,6 +221,14 @@ def build_admin_router(
         payload["in_progress_requests"] = live_log_store.count_in_progress()
         payload.update({"range": range_key, "start_ts": start_ts, "end_ts": end_ts})
         return payload
+
+    @router.get("/api/v1/logs/{log_id}")
+    def get_log_detail(log_id: str, request: Request):
+        require_admin_auth(request)
+        item = log_store.get(log_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="log not found")
+        return item
 
     @router.delete("/api/v1/logs")
     def clear_logs(request: Request):

@@ -714,9 +714,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   const logsPrevBtn = document.getElementById("logsPrevBtn");
   const logsNextBtn = document.getElementById("logsNextBtn");
   const logsPageInfo = document.getElementById("logsPageInfo");
+  const logsStartTimeInput = document.getElementById("logsStartTimeInput");
+  const logsModelInput = document.getElementById("logsModelInput");
+  const logsSearchBtn = document.getElementById("logsSearchBtn");
+  const logsResetBtn = document.getElementById("logsResetBtn");
+  const logsFilterSummary = document.getElementById("logsFilterSummary");
+  const logsJumpInput = document.getElementById("logsJumpInput");
+  const logsJumpBtn = document.getElementById("logsJumpBtn");
   const previewModal = document.getElementById("previewModal");
   const previewContent = document.getElementById("previewContent");
+  const previewBodyContent = document.getElementById("previewBodyContent");
   const previewCloseBtn = document.getElementById("previewCloseBtn");
+  const previewMediaTab = document.getElementById("previewMediaTab");
+  const previewBodyTab = document.getElementById("previewBodyTab");
+  const previewCopyBodyBtn = document.getElementById("previewCopyBodyBtn");
   const previewDownloadBtn = document.getElementById("previewDownloadBtn");
   const errorDetailModal = document.getElementById("errorDetailModal");
   const errorDetailCode = document.getElementById("errorDetailCode");
@@ -727,6 +738,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   let logsCurrentPage = 1;
   let logsTotalPages = 1;
   let logsRunningTotal = 0;
+  let previewBodyText = "";
+  let activePreviewLogId = "";
 
   function switchConfigPane(targetId) {
     if (!targetId) return;
@@ -887,6 +900,60 @@ document.addEventListener("DOMContentLoaded", async () => {
     const d = new Date(Number(ts) * 1000);
     if (Number.isNaN(d.getTime())) return "-";
     return d.toLocaleString();
+  }
+
+  function formatLogDateTime(date) {
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
+
+  function getLogFilters() {
+    return {
+      startTime: String(logsStartTimeInput?.value || "").trim(),
+      model: String(logsModelInput?.value || "").trim(),
+    };
+  }
+
+  function hasActiveLogFilters() {
+    const filters = getLogFilters();
+    return Boolean(filters.startTime || filters.model);
+  }
+
+  function buildLogsUrl() {
+    const filters = getLogFilters();
+    const params = new URLSearchParams({
+      limit: String(LOGS_PAGE_SIZE),
+      page: String(logsCurrentPage),
+    });
+    if (filters.startTime) params.set("start_time", filters.startTime);
+    if (filters.model) params.set("model", filters.model);
+    return `/api/v1/logs?${params.toString()}`;
+  }
+
+  function applyQuickLogTime(kind) {
+    if (!logsStartTimeInput) return;
+    const now = new Date();
+    if (kind === "1h") {
+      logsStartTimeInput.value = formatLogDateTime(new Date(now.getTime() - 60 * 60 * 1000));
+    } else if (kind === "24h") {
+      logsStartTimeInput.value = formatLogDateTime(new Date(now.getTime() - 24 * 60 * 60 * 1000));
+    } else if (kind === "today") {
+      logsStartTimeInput.value = formatLogDateTime(new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0));
+    }
+  }
+
+  function renderLogFilterSummary(order, total) {
+    if (!logsFilterSummary) return;
+    const filters = getLogFilters();
+    if (!filters.startTime && !filters.model) {
+      logsFilterSummary.textContent = "未筛选，最新请求在顶部";
+      return;
+    }
+    const parts = [];
+    if (filters.startTime) parts.push(`${filters.startTime} 之后`);
+    if (filters.model) parts.push(`模型 ${filters.model}`);
+    const orderText = order === "asc" ? "按时间正序" : "按时间倒序";
+    logsFilterSummary.textContent = `已筛选：${parts.join(" · ")} · ${orderText} · ${Number(total || 0)} 条`;
   }
 
   function escapeHtml(value) {
@@ -1220,9 +1287,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!logsTbody) return;
     try {
       const rangeValue = logStatsRange ? String(logStatsRange.value || "today") : "today";
+      const filtersActive = hasActiveLogFilters();
       const [runningResult, logsResult, statsResult] = await Promise.allSettled([
-        fetch("/api/v1/logs/running?limit=200"),
-        fetch(`/api/v1/logs?limit=${LOGS_PAGE_SIZE}&page=${logsCurrentPage}`),
+        filtersActive ? Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 })) : fetch("/api/v1/logs/running?limit=200"),
+        fetch(buildLogsUrl()),
         fetch(`/api/v1/logs/stats?range=${encodeURIComponent(rangeValue)}`),
       ]);
 
@@ -1233,7 +1301,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
 
       if (logsResult.status !== "fulfilled" || !logsResult.value.ok) {
-        throw new Error("加载日志失败");
+        const errorText = logsResult.status === "fulfilled" ? await logsResult.value.text() : "";
+        throw new Error(errorText || "加载日志失败");
       }
 
       const logsData = await logsResult.value.json();
@@ -1241,6 +1310,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       logsTotalPages = Math.max(1, Number(logsData.total_pages || 1));
       renderLogsPagination();
       renderLogs(logsData.logs || [], runningItems);
+      renderLogFilterSummary(String(logsData.order || "desc"), Number(logsData.total || 0));
 
       if (statsResult.status === "fulfilled" && statsResult.value.ok) {
         const statsData = await statsResult.value.json();
@@ -1253,6 +1323,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       logsRunningTotal = 0;
       logsTotalPages = Math.max(1, logsCurrentPage || 1);
       renderLogsPagination();
+      renderLogFilterSummary("desc", 0);
       renderLogStats(null);
     }
   }
@@ -1294,6 +1365,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     if (logsNextBtn) {
       logsNextBtn.disabled = safeCurrent >= safeTotalPages;
+    }
+    if (logsJumpInput) {
+      logsJumpInput.setAttribute("max", String(safeTotalPages));
+      logsJumpInput.setAttribute("placeholder", String(safeCurrent));
+    }
+    if (logsJumpBtn) {
+      logsJumpBtn.disabled = safeTotalPages <= 1;
     }
   }
 
@@ -1349,8 +1427,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     );
     const modelText = String(item.model || "-");
     const tokenCell = `<div class="log-account-cell">${accountParts.join("<br>")}</div>`;
-    const previewCell = previewUrl
-      ? `<button class="small preview-btn" data-url="${encodeURIComponent(previewUrl)}" data-kind="${previewKind || ""}">查看</button>`
+    const logId = String(item.id || "").trim();
+    const hasRequestBody = Boolean(item.has_request_body);
+    const previewCell = previewUrl || (logId && hasRequestBody)
+      ? `<button class="small preview-btn" data-url="${encodeURIComponent(previewUrl)}" data-kind="${escapeHtml(previewKind || "")}" data-log-id="${encodeURIComponent(logId)}">查看</button>`
       : `<span style="color:#7f96ad;">-</span>`;
     tr.innerHTML = `
       <td class="log-time-cell"><span class="date">${dateText}</span><span class="time">${timeText}</span></td>
@@ -1359,7 +1439,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       <td>${progressCell}</td>
       <td title="${tokenTitle}">${tokenCell}</td>
       <td class="log-model-cell" title="${escapeHtml(modelText)}">${escapeHtml(modelText)}</td>
-      <td class="log-prompt-cell" title="${(item.prompt_preview || "").replace(/"/g, "&quot;")}">${item.prompt_preview || "-"}</td>
+      <td class="log-prompt-cell" title="${escapeHtml(item.prompt_preview || "")}">${escapeHtml(item.prompt_preview || "-")}</td>
       <td>${previewCell}</td>
     `;
     if (isRunning) tr.classList.add("log-row-running");
@@ -1415,22 +1495,77 @@ document.addEventListener("DOMContentLoaded", async () => {
           return `${window.location.origin}${u.pathname}${u.search || ""}`;
         }
       } catch (_) {
-        // ignore parse errors and return original
+        // ignore parse errors and hide unsafe preview URL
       }
-      return raw;
+      return "";
     }
 
-    if (raw.startsWith("/")) {
+    if (/^\/generated\//.test(raw)) {
       return `${window.location.origin}${raw}`;
     }
-    return raw;
+    return "";
+  }
+
+  function setPreviewTab(tabName) {
+    const isBody = tabName === "body";
+    if (previewMediaTab) previewMediaTab.classList.toggle("active", !isBody);
+    if (previewBodyTab) previewBodyTab.classList.toggle("active", isBody);
+    if (previewContent) previewContent.hidden = isBody;
+    if (previewBodyContent) previewBodyContent.hidden = !isBody;
+  }
+
+  function renderPreviewBody(value, hasBody) {
+    if (!previewBodyContent || !previewCopyBodyBtn) return;
+    if (!hasBody) {
+      previewBodyText = "";
+      previewBodyContent.innerHTML = `<pre>该日志未保存请求体</pre>`;
+      previewCopyBodyBtn.disabled = true;
+      return;
+    }
+    previewBodyText = JSON.stringify(value, null, 2);
+    previewBodyContent.innerHTML = `<pre>${escapeHtml(previewBodyText)}</pre>`;
+    previewCopyBodyBtn.disabled = false;
+  }
+
+  async function loadPreviewBody(logId) {
+    if (!previewBodyContent || !previewCopyBodyBtn) return;
+    const requestedLogId = String(logId || "").trim();
+    if (!requestedLogId) {
+      renderPreviewBody(null, false);
+      return;
+    }
+    previewBodyText = "";
+    previewCopyBodyBtn.disabled = true;
+    previewBodyContent.innerHTML = `<pre>请求体加载中...</pre>`;
+    try {
+      const res = await fetch(`/api/v1/logs/${encodeURIComponent(requestedLogId)}`);
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt || `获取请求体失败 (${res.status})`);
+      }
+      const data = await res.json();
+      if (activePreviewLogId !== requestedLogId) return;
+      renderPreviewBody(data?.request_body, Boolean(data?.has_request_body));
+    } catch (err) {
+      if (activePreviewLogId !== requestedLogId) return;
+      previewBodyText = "";
+      previewCopyBodyBtn.disabled = true;
+      previewBodyContent.innerHTML = `<pre>${escapeHtml(err.message || "获取请求体失败")}</pre>`;
+    }
   }
 
   function closePreview() {
     if (!previewModal || !previewContent) return;
     previewModal.classList.remove("open");
     previewModal.setAttribute("aria-hidden", "true");
-    previewContent.innerHTML = "";
+    previewContent.replaceChildren();
+    if (previewBodyContent) previewBodyContent.innerHTML = "";
+    previewBodyText = "";
+    activePreviewLogId = "";
+    setPreviewTab("media");
+    if (previewCopyBodyBtn) {
+      previewCopyBodyBtn.disabled = true;
+    }
     if (previewDownloadBtn) {
       previewDownloadBtn.setAttribute("href", "#");
       previewDownloadBtn.setAttribute("download", "");
@@ -1478,20 +1613,42 @@ document.addEventListener("DOMContentLoaded", async () => {
     return `asset-${Date.now()}.${ext}`;
   }
 
-  function openPreview(url, kind) {
-    if (!previewModal || !previewContent || !url) return;
-    const mediaKind = kind || inferPreviewKind(url);
-    if (mediaKind === "video") {
-      previewContent.innerHTML = `<video controls autoplay playsinline src="${url}"></video>`;
+  function openPreview(url, kind, logId) {
+    if (!previewModal || !previewContent) return;
+    activePreviewLogId = String(logId || "").trim();
+    const previewUrl = String(url || "").trim();
+    const mediaKind = kind || inferPreviewKind(previewUrl);
+    if (previewUrl) {
+      setPreviewTab("media");
     } else {
-      previewContent.innerHTML = `<img src="${url}" alt="预览图" />`;
+      setPreviewTab("body");
+    }
+    previewContent.replaceChildren();
+    if (!previewUrl) {
+      const emptyState = document.createElement("div");
+      emptyState.className = "empty-state";
+      emptyState.textContent = "该日志没有媒体预览";
+      previewContent.appendChild(emptyState);
+    } else if (mediaKind === "video") {
+      const video = document.createElement("video");
+      video.controls = true;
+      video.autoplay = true;
+      video.playsInline = true;
+      video.src = previewUrl;
+      previewContent.appendChild(video);
+    } else {
+      const image = document.createElement("img");
+      image.src = previewUrl;
+      image.alt = "预览图";
+      previewContent.appendChild(image);
     }
     if (previewDownloadBtn) {
-      previewDownloadBtn.setAttribute("href", url);
-      previewDownloadBtn.setAttribute("download", buildDownloadFilename(url, mediaKind));
+      previewDownloadBtn.setAttribute("href", previewUrl || "#");
+      previewDownloadBtn.setAttribute("download", previewUrl ? buildDownloadFilename(previewUrl, mediaKind) : "");
     }
     previewModal.classList.add("open");
     previewModal.setAttribute("aria-hidden", "false");
+    loadPreviewBody(logId);
   }
 
   if (logsTbody) {
@@ -1501,8 +1658,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (target.classList.contains("preview-btn")) {
         const encodedUrl = target.getAttribute("data-url") || "";
         const kind = (target.getAttribute("data-kind") || "").trim();
-        if (!encodedUrl) return;
-        openPreview(decodeURIComponent(encodedUrl), kind);
+        const encodedLogId = target.getAttribute("data-log-id") || "";
+        if (!encodedUrl && !encodedLogId) return;
+        openPreview(encodedUrl ? decodeURIComponent(encodedUrl) : "", kind, decodeURIComponent(encodedLogId));
         return;
       }
       const clickableErrorEl = target.closest("[data-error-code]");
@@ -1521,6 +1679,26 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (previewModal) {
     previewModal.addEventListener("click", (event) => {
       if (event.target === previewModal) closePreview();
+    });
+  }
+
+  if (previewMediaTab) {
+    previewMediaTab.addEventListener("click", () => setPreviewTab("media"));
+  }
+
+  if (previewBodyTab) {
+    previewBodyTab.addEventListener("click", () => setPreviewTab("body"));
+  }
+
+  if (previewCopyBodyBtn) {
+    previewCopyBodyBtn.addEventListener("click", async () => {
+      if (!previewBodyText) return;
+      try {
+        await navigator.clipboard.writeText(previewBodyText);
+        showToast("请求体已复制", false);
+      } catch (err) {
+        showToast("复制请求体失败", true);
+      }
     });
   }
 
@@ -1549,6 +1727,39 @@ document.addEventListener("DOMContentLoaded", async () => {
       loadLogs();
     });
   }
+
+  if (logsSearchBtn) {
+    logsSearchBtn.addEventListener("click", () => {
+      logsCurrentPage = 1;
+      loadLogs();
+    });
+  }
+
+  if (logsResetBtn) {
+    logsResetBtn.addEventListener("click", () => {
+      if (logsStartTimeInput) logsStartTimeInput.value = "";
+      if (logsModelInput) logsModelInput.value = "";
+      logsCurrentPage = 1;
+      loadLogs();
+    });
+  }
+
+  [logsStartTimeInput, logsModelInput].forEach((input) => {
+    if (!input) return;
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      logsCurrentPage = 1;
+      loadLogs();
+    });
+  });
+
+  document.querySelectorAll(".log-quick-time").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      applyQuickLogTime(String(btn.getAttribute("data-log-quick") || ""));
+      logsCurrentPage = 1;
+      loadLogs();
+    });
+  });
 
   if (logStatsRange) {
     logStatsRange.addEventListener("change", () => {
@@ -1586,6 +1797,26 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (logsCurrentPage >= logsTotalPages) return;
       logsCurrentPage += 1;
       loadLogs();
+    });
+  }
+
+  function jumpToLogsPage() {
+    if (!logsJumpInput) return;
+    const requested = Number(logsJumpInput.value || 1);
+    const safeRequested = Number.isFinite(requested) ? Math.round(requested) : 1;
+    logsCurrentPage = Math.min(Math.max(1, safeRequested), Math.max(1, logsTotalPages));
+    logsJumpInput.value = "";
+    loadLogs();
+  }
+
+  if (logsJumpBtn) {
+    logsJumpBtn.addEventListener("click", jumpToLogsPage);
+  }
+
+  if (logsJumpInput) {
+    logsJumpInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      jumpToLogsPage();
     });
   }
 

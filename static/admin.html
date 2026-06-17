@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/admin.css?v=20260302-4" />
+  <link rel="stylesheet" href="/static/admin.css?v=20260617-logs" />
 </head>
 <body>
   <div class="bg-orb bg-orb-a"></div>
@@ -20,9 +20,9 @@
     </header>
 
     <div class="tabs">
-      <button class="tab-btn active" data-target="tokens">Token 管理</button>
-      <button class="tab-btn" data-target="config">系统配置</button>
-      <button class="tab-btn" data-target="logs">请求日志</button>
+      <button class="tab-btn active" type="button" data-target="tokens">Token 管理</button>
+      <button class="tab-btn" type="button" data-target="config">系统配置</button>
+      <button class="tab-btn" type="button" data-target="logs">请求日志</button>
     </div>
 
     <!-- Tokens Tab -->
@@ -30,8 +30,8 @@
       <section class="card quick-actions-card">
         <h2>快捷操作</h2>
         <div class="actions">
-          <button id="openAddTokenModalBtn">添加 Token</button>
-          <button id="openCookieImportBtn" class="secondary">导入 Cookie</button>
+          <button id="openAddTokenModalBtn" type="button">添加 Token</button>
+          <button id="openCookieImportBtn" class="secondary" type="button">导入 Cookie</button>
         </div>
       </section>
 
@@ -40,11 +40,11 @@
           <h2>Token 账号池</h2>
           <div class="token-list-actions">
             <div class="actions">
-              <button id="exportTokensBtn" class="secondary">导出 Token</button>
-              <button id="exportCookiesBtn" class="secondary">导出 Cookie</button>
-              <button id="deleteTokensBatchBtn" class="danger">批量删除</button>
-              <button id="refreshCreditsBatchBtn" class="secondary">批量刷新积分</button>
-              <button id="refreshBtn" class="secondary">刷新列表</button>
+              <button id="exportTokensBtn" class="secondary" type="button">导出 Token</button>
+              <button id="exportCookiesBtn" class="secondary" type="button">导出 Cookie</button>
+              <button id="deleteTokensBatchBtn" class="danger" type="button">批量删除</button>
+              <button id="refreshCreditsBatchBtn" class="secondary" type="button">批量刷新积分</button>
+              <button id="refreshBtn" class="secondary" type="button">刷新列表</button>
             </div>
             <div id="tokenCreditsSummary" class="token-credits-summary">
               可用积分总量：<strong id="tokenAvailableCreditsTotal">-</strong>
@@ -221,7 +221,7 @@
           </section>
 
           <div class="actions" style="margin-top: 24px;">
-            <button id="saveConfigBtn">保存配置</button>
+            <button id="saveConfigBtn" type="button">保存配置</button>
             <span id="configMsg" class="msg"></span>
           </div>
         </div>
@@ -240,8 +240,8 @@
               <option value="7d">近 7 天</option>
               <option value="30d">近 30 天</option>
             </select>
-            <button id="refreshLogsBtn" class="secondary">刷新</button>
-            <button id="clearLogsBtn" class="danger">清空日志</button>
+            <button id="refreshLogsBtn" class="secondary" type="button">刷新</button>
+            <button id="clearLogsBtn" class="danger" type="button">清空日志</button>
           </div>
         </div>
         <p class="help" style="margin-bottom: 16px;">仅展示外部 OpenAI 风格请求日志。失败状态中的状态码可点击查看错误信息。</p>
@@ -264,6 +264,30 @@
           </div>
         </div>
         <p id="logStatsUpdatedAt" class="help" style="margin: 0 0 16px 0;"></p>
+
+        <div id="logsFilterBar" class="logs-filter-bar">
+          <div class="logs-filter-row">
+            <div class="logs-filter-field">
+              <label for="logsStartTimeInput">从此时间开始 <span>本地时间</span></label>
+              <input id="logsStartTimeInput" type="text" class="input-text" placeholder="2026-06-17 17:51:46" autocomplete="off" />
+            </div>
+            <div class="logs-filter-field logs-filter-model">
+              <label for="logsModelInput">模型</label>
+              <input id="logsModelInput" type="text" class="input-text" placeholder="全部模型" autocomplete="off" />
+            </div>
+            <div class="logs-filter-actions">
+              <button id="logsSearchBtn" class="secondary" type="button">查询</button>
+              <button id="logsResetBtn" class="secondary" type="button">重置</button>
+            </div>
+          </div>
+          <div class="logs-filter-row logs-filter-quick-row">
+            <span class="help">快捷时间</span>
+            <button class="secondary small log-quick-time" type="button" data-log-quick="1h">最近1小时</button>
+            <button class="secondary small log-quick-time" type="button" data-log-quick="today">今天0点</button>
+            <button class="secondary small log-quick-time" type="button" data-log-quick="24h">最近24小时</button>
+            <span id="logsFilterSummary" class="help logs-filter-summary">未筛选，最新请求在顶部</span>
+          </div>
+        </div>
 
         <div class="table-wrapper">
           <table id="logsTable">
@@ -290,6 +314,10 @@
           <button id="logsPrevBtn" class="secondary small" type="button">上一页</button>
           <span id="logsPageInfo" class="help">第 1 / 1 页</span>
           <button id="logsNextBtn" class="secondary small" type="button">下一页</button>
+          <span class="help logs-jump-label">跳至</span>
+          <input id="logsJumpInput" class="logs-jump-input" type="number" min="1" step="1" inputmode="numeric" aria-label="跳转到日志页码" />
+          <span class="help">页</span>
+          <button id="logsJumpBtn" class="secondary small" type="button">跳转</button>
         </div>
       </section>
     </div>
@@ -310,7 +338,7 @@
           <p class="help">支持 .txt（每行一个 token）或 .json（数组/对象）。</p>
         </div>
         <div class="actions">
-          <button id="addBtn">确认添加</button>
+          <button id="addBtn" type="button">确认添加</button>
           <span id="addMsg" class="msg"></span>
         </div>
       </div>
@@ -336,7 +364,7 @@
         </div>
 
         <div class="actions">
-          <button id="importCookieBtn" class="secondary">导入 Cookie</button>
+          <button id="importCookieBtn" class="secondary" type="button">导入 Cookie</button>
         </div>
         <span id="refreshMsg" class="msg"></span>
       </div>
@@ -345,9 +373,17 @@
 
   <div id="previewModal" class="preview-modal" aria-hidden="true">
     <div class="preview-modal-dialog" role="dialog" aria-modal="true" aria-label="媒体预览">
-      <button id="previewCloseBtn" class="preview-close" type="button">关闭</button>
+      <div class="preview-modal-head">
+        <div class="preview-tabs" role="tablist" aria-label="预览内容切换">
+          <button id="previewMediaTab" class="preview-tab active" type="button" data-preview-tab="media">媒体预览</button>
+          <button id="previewBodyTab" class="preview-tab" type="button" data-preview-tab="body">请求体</button>
+        </div>
+        <button id="previewCloseBtn" class="preview-close" type="button">关闭</button>
+      </div>
       <div id="previewContent" class="preview-content"></div>
+      <div id="previewBodyContent" class="preview-body-content" hidden></div>
       <div class="preview-actions">
+        <button id="previewCopyBodyBtn" class="preview-download" type="button" disabled>复制请求体</button>
         <a id="previewDownloadBtn" class="preview-download" href="#" download>下载</a>
       </div>
     </div>
@@ -365,6 +401,6 @@
 
   <div id="appToast" class="toast" role="status" aria-live="polite"></div>
 
-  <script src="/static/admin.js?v=20260302-7"></script>
+  <script src="/static/admin.js?v=20260617-logs-safe"></script>
 </body>
 </html>

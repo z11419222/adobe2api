@@ -5,7 +5,10 @@ import uuid
 from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+
+JsonDict = dict[str, Any]
 
 
 @dataclass
@@ -85,6 +88,7 @@ class RequestLogRecord:
     token_account_email: Optional[str] = None
     token_source: Optional[str] = None
     token_attempt: Optional[int] = None
+    request_body: Optional[Any] = None
 
 
 class RequestLogStore:
@@ -110,7 +114,7 @@ class RequestLogStore:
         with self._file_path.open("w", encoding="utf-8") as f:
             f.writelines(tail)
 
-    def _append_payload_locked(self, payload: dict) -> None:
+    def _append_payload_locked(self, payload: JsonDict) -> None:
         with self._file_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
         self._append_since_truncate += 1
@@ -122,13 +126,13 @@ class RequestLogStore:
         payload = asdict(item)
         self.add_payload(payload)
 
-    def add_payload(self, payload: dict) -> None:
+    def add_payload(self, payload: JsonDict) -> None:
         if not isinstance(payload, dict):
             return
         with self._lock:
             self._append_payload_locked(payload)
 
-    def upsert(self, item_id: str, payload: dict) -> None:
+    def upsert(self, item_id: str, payload: JsonDict) -> None:
         if not item_id:
             return
         if not isinstance(payload, dict):
@@ -138,9 +142,67 @@ class RequestLogStore:
         with self._lock:
             self._append_payload_locked(item)
 
-    def list(self, limit: int = 20, page: int = 1) -> tuple[list[dict], int]:
+    @staticmethod
+    def _list_item(item: JsonDict) -> JsonDict:
+        payload = dict(item)
+        has_request_body = "request_body" in payload and payload.get("request_body") is not None
+        payload.pop("request_body", None)
+        payload["has_request_body"] = has_request_body
+        return payload
+
+    @staticmethod
+    def _with_body_flag(item: JsonDict) -> JsonDict:
+        payload = dict(item)
+        payload["has_request_body"] = (
+            "request_body" in payload and payload.get("request_body") is not None
+        )
+        return payload
+
+    def list(
+        self,
+        limit: int = 20,
+        page: int = 1,
+        start_ts: Optional[float] = None,
+        model: Optional[str] = None,
+        order: str = "desc",
+    ) -> tuple[list[JsonDict], int]:
         safe_limit = min(max(int(limit or 20), 1), 100)
         safe_page = max(int(page or 1), 1)
+        safe_order = "asc" if str(order or "").strip().lower() == "asc" else "desc"
+        model_filter = str(model or "").strip() or None
+        filtered_mode = start_ts is not None or model_filter is not None or safe_order == "asc"
+
+        if filtered_mode:
+            data: list[JsonDict] = []
+            with self._lock:
+                with self._file_path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        raw = line.strip()
+                        if not raw:
+                            continue
+                        try:
+                            item = json.loads(raw)
+                        except Exception:
+                            continue
+                        if not isinstance(item, dict):
+                            continue
+                        try:
+                            ts_val = float(item.get("ts") or 0)
+                        except Exception:
+                            ts_val = 0.0
+                        if start_ts is not None and ts_val < float(start_ts):
+                            continue
+                        if model_filter is not None and str(item.get("model") or "") != model_filter:
+                            continue
+                        data.append(item)
+
+            total = len(data)
+            if safe_order == "desc":
+                data = list(reversed(data))
+            start_idx = (safe_page - 1) * safe_limit
+            end_idx = start_idx + safe_limit
+            return [self._list_item(item) for item in data[start_idx:end_idx]], total
+
         window_size = safe_limit * safe_page
         tail: deque[str] = deque(maxlen=window_size)
         total = 0
@@ -161,7 +223,7 @@ class RequestLogStore:
         end_idx = available - start_from_end
         start_idx = max(0, end_idx - safe_limit)
         selected = tail_lines[start_idx:end_idx]
-        data: list[dict] = []
+        data: list[JsonDict] = []
         for line in reversed(selected):
             line = line.strip()
             if not line:
@@ -169,16 +231,36 @@ class RequestLogStore:
             try:
                 item = json.loads(line)
                 if isinstance(item, dict):
-                    data.append(item)
+                    data.append(self._list_item(item))
             except Exception:
                 continue
         return data, total
+
+    def get(self, item_id: str) -> Optional[JsonDict]:
+        target = str(item_id or "").strip()
+        if not target:
+            return None
+        with self._lock:
+            with self._file_path.open("r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+        for line in reversed(lines):
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                item = json.loads(raw)
+            except Exception:
+                continue
+            if isinstance(item, dict) and str(item.get("id") or "") == target:
+                return self._with_body_flag(item)
+        return None
 
     def stats(
         self,
         start_ts: Optional[float] = None,
         end_ts: Optional[float] = None,
-    ) -> dict:
+    ) -> JsonDict:
         total_requests = 0
         failed_requests = 0
         generated_images = 0
@@ -293,7 +375,7 @@ class ErrorDetailStore:
                 f.write(json.dumps(payload, ensure_ascii=False) + "\n")
             self._truncate_to_max_locked()
 
-    def get(self, code: str) -> Optional[dict]:
+    def get(self, code: str) -> Optional[JsonDict]:
         target = str(code or "").strip()
         if not target:
             return None
@@ -317,10 +399,10 @@ class ErrorDetailStore:
 class LiveRequestStore:
     def __init__(self, max_items: int = 2000) -> None:
         self._lock = threading.Lock()
-        self._items: dict[str, dict] = {}
+        self._items: dict[str, JsonDict] = {}
         self._max_items = max(100, int(max_items or 2000))
 
-    def upsert(self, item_id: str, payload: dict) -> None:
+    def upsert(self, item_id: str, payload: JsonDict) -> None:
         iid = str(item_id or "").strip()
         if not iid or not isinstance(payload, dict):
             return
@@ -348,7 +430,7 @@ class LiveRequestStore:
         with self._lock:
             self._items.pop(iid, None)
 
-    def list(self, limit: int = 200) -> list[dict]:
+    def list(self, limit: int = 200) -> list[JsonDict]:
         safe_limit = min(max(int(limit or 200), 1), 1000)
         with self._lock:
             data = list(self._items.values())

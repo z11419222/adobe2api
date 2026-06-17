@@ -39,6 +39,7 @@ from core.adobe_client import (
 from core.token_mgr import token_manager
 from core.config_mgr import config_manager
 from core.refresh_mgr import refresh_manager
+from core.request_logs import sanitize_request_body
 from core.stores import (
     ErrorDetailRecord,
     ErrorDetailStore,
@@ -158,7 +159,7 @@ def _extract_logging_fields(raw_body: bytes) -> dict[str, Optional[str]]:
         return {"model": None, "prompt_preview": None}
 
 
-def _upsert_live_request(request: Request, patch: dict) -> None:
+def _upsert_live_request(request: Request, patch: dict[str, Any]) -> None:
     try:
         log_id = str(getattr(request.state, "log_id", "") or "").strip()
         if not log_id or not isinstance(patch, dict):
@@ -322,7 +323,9 @@ def _set_request_task_progress(
     # (_append_attempt_log) or by middleware finalization.
 
 
-def _set_request_token_context(request: Request, token: str, attempt: int) -> dict:
+def _set_request_token_context(
+    request: Request, token: str, attempt: int
+) -> dict[str, Any]:
     meta = token_manager.get_meta_by_value(token)
     try:
         request.state.log_token_id = meta.get("token_id")
@@ -351,7 +354,7 @@ def _set_request_token_context(request: Request, token: str, attempt: int) -> di
 def _append_attempt_log(
     request: Request,
     operation: str,
-    token_meta: dict,
+    token_meta: dict[str, Any],
     attempt: int,
     attempt_started: float,
     status_code: int,
@@ -404,6 +407,7 @@ def _append_attempt_log(
                 ),
                 token_source=str(token_meta.get("token_source") or "") or None,
                 token_attempt=int(attempt),
+                request_body=getattr(request.state, "log_request_body", None),
             )
         )
         records = getattr(request.state, "log_attempt_records", None)
@@ -425,6 +429,7 @@ async def request_logger(request: Request, call_next):
     preview_kind = None
     raw_body = b""
     body_meta = {"model": None, "prompt_preview": None}
+    request_body = None
     error_text = None
     status_code = 500
 
@@ -440,6 +445,8 @@ async def request_logger(request: Request, call_next):
         try:
             raw_body = await request.body()
             request._body = raw_body
+            request_body = sanitize_request_body(raw_body)
+            request.state.log_request_body = request_body
             if path in {
                 "/v1/images/generations",
                 "/v1/chat/completions",
@@ -568,13 +575,14 @@ async def request_logger(request: Request, call_next):
                             token_account_email=token_account_email,
                             token_source=token_source,
                             token_attempt=token_attempt,
+                            request_body=request_body,
                         )
                     ),
                 )
     return response
 
 
-def _resolve_video_options(data: dict) -> tuple[bool, str, str]:
+def _resolve_video_options(data: dict[str, Any]) -> tuple[bool, str, str]:
     generate_audio = bool(data.get("generate_audio", data.get("generateAudio", True)))
     negative_prompt = str(
         data.get("negative_prompt") or data.get("negativePrompt") or ""
@@ -1247,7 +1255,7 @@ def _get_generated_storage_stats() -> dict[str, int | float]:
     }
 
 
-def _video_ext_from_meta(meta: dict) -> str:
+def _video_ext_from_meta(meta: dict[str, Any]) -> str:
     content_type = str(meta.get("contentType") or "").lower()
     if "webm" in content_type:
         return "webm"
@@ -1256,7 +1264,7 @@ def _video_ext_from_meta(meta: dict) -> str:
     return "mp4"
 
 
-def _sse_chat_stream(payload: dict):
+def _sse_chat_stream(payload: dict[str, Any]):
     import json
 
     cid = payload["id"]
